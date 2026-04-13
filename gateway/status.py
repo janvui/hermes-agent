@@ -29,6 +29,31 @@ _IS_WINDOWS = sys.platform == "win32"
 _UNSET = object()
 
 
+def _process_exists(pid: int) -> bool:
+    """Check if a process with the given PID exists. Works on both Windows and Unix."""
+    if _IS_WINDOWS:
+        try:
+            # On Windows, use tasklist command to check if process exists
+            result = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+            )
+            # If process exists, its PID will appear in the output
+            return str(pid) in result.stdout
+        except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError):
+            return False
+    else:
+        # On Unix, use os.kill with signal 0
+        try:
+            os.kill(pid, 0)
+            return True
+        except (ProcessLookupError, PermissionError, OSError):
+            return False
+
+
 def _get_pid_path() -> Path:
     """Return the path to the gateway PID file, respecting HERMES_HOME."""
     home = get_hermes_home()
@@ -302,9 +327,7 @@ def acquire_scoped_lock(scope: str, identity: str, metadata: Optional[dict[str, 
 
         stale = existing_pid is None
         if not stale:
-            try:
-                os.kill(existing_pid, 0)
-            except (ProcessLookupError, PermissionError):
+            if not _process_exists(existing_pid):
                 stale = True
             else:
                 current_start = _get_process_start_time(existing_pid)
@@ -405,9 +428,7 @@ def get_running_pid() -> Optional[int]:
         remove_pid_file()
         return None
 
-    try:
-        os.kill(pid, 0)  # signal 0 = existence check, no actual signal sent
-    except (ProcessLookupError, PermissionError):
+    if not _process_exists(pid):
         remove_pid_file()
         return None
 
